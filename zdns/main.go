@@ -50,6 +50,7 @@ func main() {
 	flags.StringVar(&gc.NamePrefix, "prefix", "", "name to be prepended to what's passed in (e.g., www.)")
 	flags.StringVar(&gc.NameOverride, "override-name", "", "name overrides all passed in names")
 	flags.BoolVar(&gc.AlexaFormat, "alexa", false, "is input file from Alexa Top Million download")
+	flags.BoolVar(&gc.MetadataFormat, "metadata-passthrough", false, "if input records have the form 'name,METADATA', METADATA will be propagated to the output")
 	flags.BoolVar(&gc.IterativeResolution, "iterative", false, "Perform own iteration instead of relying on recursive resolver")
 	flags.StringVar(&gc.InputFilePath, "input-file", "-", "names to read")
 	flags.StringVar(&gc.OutputFilePath, "output-file", "-", "where should JSON output be saved")
@@ -180,8 +181,7 @@ func main() {
 		}
 		log.Info("using local address: ", localaddr_string)
 		gc.LocalAddrSpecified = true
-	}
-	if *localif_string != "" {
+	} else if *localif_string != "" {
 		if gc.LocalAddrSpecified {
 			log.Fatal("Both --local-addr and --local-interface specified.")
 		} else {
@@ -198,6 +198,13 @@ func main() {
 				gc.LocalAddrSpecified = true
 			}
 			log.Info("using local interface: ", localif_string)
+		}
+	} else {
+		// Find local address for use in unbound UDP sockets
+		if conn, err := net.Dial("udp", "8.8.8.8:53"); err != nil {
+			log.Fatal("Unable to find default IP address: ", err)
+		} else {
+			gc.LocalAddrs = append(gc.LocalAddrs, conn.LocalAddr().(*net.UDPAddr).IP)
 		}
 	}
 	if *nanoSeconds {
@@ -216,6 +223,9 @@ func main() {
 	}
 	if gc.NameServerMode && gc.AlexaFormat {
 		log.Fatal("Alexa mode is incompatible with name server mode")
+	}
+	if gc.NameServerMode && gc.MetadataFormat {
+		log.Fatal("Metadata mode is incompatible with name server mode")
 	}
 	if gc.NameServerMode && gc.NameOverride == "" && gc.Module != "BINDVERSION" {
 		log.Fatal("Static Name must be defined with --override-name in --name-server-mode unless DNS module does not expect names (e.g., BINDVERSION).")
