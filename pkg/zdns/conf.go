@@ -28,6 +28,7 @@ type GlobalConf struct {
 	MetadataFormat        bool
 	NameServerInputFormat bool
 	IterativeResolution   bool
+	LookupAllNameServers  bool
 
 	ResultVerbosity string
 	IncludeInOutput string
@@ -43,6 +44,7 @@ type GlobalConf struct {
 	NameServers          []string
 	TCPOnly              bool
 	UDPOnly              bool
+	RecycleSockets       bool
 	LocalAddrSpecified   bool
 	LocalAddrs           []net.IP
 
