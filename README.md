@@ -19,12 +19,12 @@ for the IPs of MX servers for the domains in the Alexa Top Million:
 Install
 =======
 
-ZDNS can be installed by checking out the repository and running `go build`.
+ZDNS can be installed by checking out the repository and running `make zdns`.
 
 ```bash
 git clone https://github.com/zmap/zdns.git
 cd zdns
-go build
+make zdns
 ```
 
 Usage
@@ -47,7 +47,7 @@ package. Its functionality is described below.
 
 ZDNS provides several types of modules:
 
-- *Raw DNS modules* provide the raw DNS reponse from the server similar to dig,
+- *Raw DNS modules* provide the raw DNS response from the server similar to dig,
   but in JSON. There is a module for (nearly) every type of DNS record
 
 - *Lookup modules* provide more helpful responses when multiple queries are
@@ -304,6 +304,15 @@ presence or structure of this field. This field (and its existence) may change
 at any time as we expand support for additional record types. If you find
 yourself using this field, please consider submitting a pull-request adding
 parser support.
+
+Contributing
+============
+
+If you're interested in contributing to ZDNS, see [CONTRIBUTING](./CONTRIBUTING.md).
+
+Contact
+=======
+- Please use [Github issues](https://github.com/zmap/zdns/issues) for filing bugs.
 
 License
 =======

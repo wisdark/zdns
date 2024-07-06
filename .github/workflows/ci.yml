@@ -1,30 +1,29 @@
 name: CI
-on: [ push, pull_request ]
+on:
+  push:
+    branches:
+      - main
+  pull_request:
 jobs:
   check-license:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Check for ZDNS License Header
         run: |
-          export NO_HEADERS_FOUND=$(grep -RiL --include="*.go" "ZDNS Copyright .* Regents of the University of Michigan" ./)
-          if test -n "$NO_HEADERS_FOUND"; then
-            echo 'FOUND .go FILES WITHOUT HEADERS.'
-            echo "$NO_HEADERS_FOUND"
-            exit 1
-          else
-            echo 'All .go files in repo have an appropriate header'
-          fi
+          ./.github/workflows/check_license.sh
+  # This tests runs both unit tests and integration tests that validate that ZDNS can pull many DNS record types against
+  # our controlled domain
   build-and-test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Setup Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v5
         with:
-          go-version: '1.17'
+          go-version: '1.20'
       - name: Build
         run: |
           go version
@@ -36,4 +35,54 @@ jobs:
           sudo rm /etc/resolv.conf
           sudo ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
           python --version
-          ./integration_tests.py
+          pip install -r testing/requirements.txt
+          ./testing/integration_tests.py
+  build-and-large-scan-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.20'
+      - name: Build
+        run: |
+          go version
+          make
+      - name: Integration Tests
+        run: |
+          sudo rm /etc/resolv.conf
+          sudo ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+          python --version
+          ./testing/large_scan_integration/large_scan_integration_tests.py
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.20'
+      - name: Other lint
+        run: |
+          go install golang.org/x/tools/cmd/goimports@latest
+          output=$(goimports -d -local "github.com/zmap/zdns" ./)
+          if [ -n "$output" ]; then
+            echo "goimports found issues:"
+            echo "$output"
+            exit 1
+          else
+            echo "No issues found by goimports."
+          fi
+          output=$(gofmt -d .)
+            if [ -n "$output" ]; then
+                echo "gofmt found issues:"
+                echo "$output"
+                exit 1
+            else
+                echo "No issues found by gofmt."
+            fi
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6.0.1
