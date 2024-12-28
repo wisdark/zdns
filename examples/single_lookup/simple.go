@@ -14,22 +14,24 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"net"
 
+	"github.com/miekg/dns"
 	log "github.com/sirupsen/logrus"
-	"github.com/zmap/dns"
 
+	"github.com/zmap/zdns/examples/utils"
 	"github.com/zmap/zdns/src/zdns"
 )
 
 func main() {
-
 	// Perform the lookup
 	domain := "google.com"
 	dnsQuestion := &zdns.Question{Name: domain, Type: dns.TypeA, Class: dns.ClassINET}
 	resolver := initializeResolver()
 
-	result, _, status, err := resolver.ExternalLookup(dnsQuestion, "1.1.1.1:53")
+	result, _, status, err := resolver.ExternalLookup(context.Background(), dnsQuestion, &zdns.NameServer{IP: net.ParseIP("1.1.1.1"), Port: 53})
 	if err != nil {
 		log.Fatal("Error looking up domain: ", err)
 	}
@@ -43,7 +45,7 @@ func main() {
 
 	log.Warn("\n\n This lookup just used the Cloudflare recursive resolver, let's run our own recursion.")
 	// Iterative Lookups start at the root nameservers and follow the chain of referrals to the authoritative nameservers.
-	result, trace, status, err := resolver.IterativeLookup(&zdns.Question{Name: domain, Type: dns.TypeA, Class: dns.ClassINET})
+	result, trace, status, err := resolver.IterativeLookup(context.Background(), &zdns.Question{Name: domain, Type: dns.TypeA, Class: dns.ClassINET})
 	if err != nil {
 		log.Fatal("Error looking up domain: ", err)
 	}
@@ -52,15 +54,23 @@ func main() {
 	if err != nil {
 		log.Fatal("Error marshalling trace: ", err)
 	}
-	log.Warnf("Trace: %v", string(bytes))
 	log.Warnf("Status: %v", status)
+	resolver.Close()
 }
 
 func initializeResolver() *zdns.Resolver {
+	localAddr, err := utils.GetLocalIPByConnecting()
+	if err != nil {
+		log.Fatal("Error getting local IP: ", err)
+	}
 	// Create a ResolverConfig object
 	resolverConfig := zdns.NewResolverConfig()
 	// Set any desired options on the ResolverConfig object
 	resolverConfig.LogLevel = log.InfoLevel
+	resolverConfig.LocalAddrsV4 = []net.IP{localAddr}
+	resolverConfig.ExternalNameServersV4 = []zdns.NameServer{{IP: net.ParseIP("1.1.1.1"), Port: 53}}
+	resolverConfig.RootNameServersV4 = []zdns.NameServer{{IP: net.ParseIP("198.41.0.4"), Port: 53}}
+	resolverConfig.IPVersionMode = zdns.IPv4Only
 	// Create a new Resolver object with the ResolverConfig object, it will retain all settings set on the ResolverConfig object
 	resolver, err := zdns.InitResolver(resolverConfig)
 	if err != nil {

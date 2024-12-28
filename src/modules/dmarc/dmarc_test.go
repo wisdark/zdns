@@ -15,9 +15,11 @@
 package dmarc
 
 import (
+	"context"
+	"net"
 	"testing"
 
-	"github.com/zmap/dns"
+	"github.com/miekg/dns"
 	"gotest.tools/v3/assert"
 
 	"github.com/zmap/zdns/src/cli"
@@ -26,7 +28,7 @@ import (
 
 type QueryRecord struct {
 	zdns.Question
-	NameServer string
+	NameServer *zdns.NameServer
 }
 
 var mockResults = make(map[string]*zdns.SingleQueryResult)
@@ -34,8 +36,8 @@ var queries []QueryRecord
 
 type MockLookup struct{}
 
-func (ml MockLookup) DoSingleDstServerLookup(r *zdns.Resolver, question zdns.Question, nameServer string, isIterative bool) (*zdns.SingleQueryResult, zdns.Trace, zdns.Status, error) {
-	queries = append(queries, QueryRecord{question, nameServer})
+func (ml MockLookup) DoDstServersLookup(ctx context.Context, r *zdns.Resolver, question zdns.Question, nameServers []zdns.NameServer, isIterative bool) (*zdns.SingleQueryResult, zdns.Trace, zdns.Status, error) {
+	queries = append(queries, QueryRecord{question, &nameServers[0]})
 	if res, ok := mockResults[question.Name]; ok {
 		return res, nil, zdns.StatusNoError, nil
 	} else {
@@ -46,8 +48,11 @@ func (ml MockLookup) DoSingleDstServerLookup(r *zdns.Resolver, question zdns.Que
 func InitTest(t *testing.T) *zdns.Resolver {
 	mockResults = make(map[string]*zdns.SingleQueryResult)
 	rc := zdns.ResolverConfig{
-		ExternalNameServers: []string{"127.0.0.1"},
-		LookupClient:        MockLookup{}}
+		RootNameServersV4:     []zdns.NameServer{{IP: net.ParseIP("127.0.0.53"), Port: 53}},
+		ExternalNameServersV4: []zdns.NameServer{{IP: net.ParseIP("127.0.0.1"), Port: 53}},
+		LocalAddrsV4:          []net.IP{net.ParseIP("127.0.0.1")},
+		IPVersionMode:         zdns.IPv4Only,
+		LookupClient:          MockLookup{}}
 	r, err := zdns.InitResolver(&rc)
 	assert.NilError(t, err)
 
@@ -62,13 +67,13 @@ func TestDmarcLookup_Valid_1(t *testing.T) {
 			zdns.Answer{Name: "_dmarc.zdns-testing.com", Answer: "v=DMARC1; p=none; rua=mailto:postmaster@censys.io"}},
 	}
 	dmarcMod := DmarcLookupModule{}
-	err := dmarcMod.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{}, nil)
+	err := dmarcMod.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{})
 	assert.NilError(t, err)
-	res, _, status, _ := dmarcMod.Lookup(resolver, "_dmarc.zdns-testing.com", "")
+	res, _, status, _ := dmarcMod.Lookup(resolver, "_dmarc.zdns-testing.com", nil)
 	assert.Equal(t, queries[0].Class, uint16(dns.ClassINET))
 	assert.Equal(t, queries[0].Type, dns.TypeTXT)
 	assert.Equal(t, queries[0].Name, "_dmarc.zdns-testing.com")
-	assert.Equal(t, queries[0].NameServer, "127.0.0.1")
+	assert.Equal(t, queries[0].NameServer.String(), "127.0.0.1:53")
 
 	assert.Equal(t, zdns.StatusNoError, status)
 	assert.Equal(t, res.(Result).Dmarc, "v=DMARC1; p=none; rua=mailto:postmaster@censys.io")
@@ -83,13 +88,13 @@ func TestDmarcLookup_Valid_2(t *testing.T) {
 			zdns.Answer{Name: "_dmarc.zdns-testing.com", Answer: "V=DMARC1; p=none; rua=mailto:postmaster@censys.io"}},
 	}
 	dmarcMod := DmarcLookupModule{}
-	err := dmarcMod.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{}, nil)
+	err := dmarcMod.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{})
 	assert.NilError(t, err)
-	res, _, status, _ := dmarcMod.Lookup(resolver, "_dmarc.zdns-testing.com", "")
+	res, _, status, _ := dmarcMod.Lookup(resolver, "_dmarc.zdns-testing.com", nil)
 	assert.Equal(t, queries[0].Class, uint16(dns.ClassINET))
 	assert.Equal(t, queries[0].Type, dns.TypeTXT)
 	assert.Equal(t, queries[0].Name, "_dmarc.zdns-testing.com")
-	assert.Equal(t, queries[0].NameServer, "127.0.0.1")
+	assert.Equal(t, queries[0].NameServer.String(), "127.0.0.1:53")
 
 	assert.Equal(t, zdns.StatusNoError, status)
 	assert.Equal(t, res.(Result).Dmarc, "V=DMARC1; p=none; rua=mailto:postmaster@censys.io")
@@ -104,13 +109,13 @@ func TestDmarcLookup_Valid_3(t *testing.T) {
 			zdns.Answer{Name: "_dmarc.zdns-testing.com", Answer: "v\t\t\t=\t\t  DMARC1\t\t; p=none; rua=mailto:postmaster@censys.io"}},
 	}
 	dmarcMod := DmarcLookupModule{}
-	err := dmarcMod.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{}, nil)
+	err := dmarcMod.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{})
 	assert.NilError(t, err)
-	res, _, status, _ := dmarcMod.Lookup(resolver, "_dmarc.zdns-testing.com", "")
+	res, _, status, _ := dmarcMod.Lookup(resolver, "_dmarc.zdns-testing.com", nil)
 	assert.Equal(t, queries[0].Class, uint16(dns.ClassINET))
 	assert.Equal(t, queries[0].Type, dns.TypeTXT)
 	assert.Equal(t, queries[0].Name, "_dmarc.zdns-testing.com")
-	assert.Equal(t, queries[0].NameServer, "127.0.0.1")
+	assert.Equal(t, queries[0].NameServer.String(), "127.0.0.1:53")
 
 	assert.Equal(t, zdns.StatusNoError, status)
 	assert.Equal(t, res.(Result).Dmarc, "v\t\t\t=\t\t  DMARC1\t\t; p=none; rua=mailto:postmaster@censys.io")
@@ -125,13 +130,13 @@ func TestDmarcLookup_NotValid_1(t *testing.T) {
 			zdns.Answer{Name: "_dmarc.zdns-testing.com", Answer: "\t\t   v   =DMARC1; p=none; rua=mailto:postmaster@censys.io"}},
 	}
 	dmarcMod := DmarcLookupModule{}
-	err := dmarcMod.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{}, nil)
+	err := dmarcMod.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{})
 	assert.NilError(t, err)
-	res, _, status, _ := dmarcMod.Lookup(resolver, "_dmarc.zdns-testing.com", "")
+	res, _, status, _ := dmarcMod.Lookup(resolver, "_dmarc.zdns-testing.com", nil)
 	assert.Equal(t, queries[0].Class, uint16(dns.ClassINET))
 	assert.Equal(t, queries[0].Type, dns.TypeTXT)
 	assert.Equal(t, queries[0].Name, "_dmarc.zdns-testing.com")
-	assert.Equal(t, queries[0].NameServer, "127.0.0.1")
+	assert.Equal(t, queries[0].NameServer.String(), "127.0.0.1:53")
 
 	assert.Equal(t, zdns.StatusNoRecord, status)
 	assert.Equal(t, res.(Result).Dmarc, "")
@@ -146,13 +151,13 @@ func TestDmarcLookup_NotValid_2(t *testing.T) {
 			zdns.Answer{Name: "_dmarc.zdns-testing.com", Answer: "v=DMARc1; p=none; rua=mailto:postmaster@censys.io"}},
 	}
 	dmarcMod := DmarcLookupModule{}
-	err := dmarcMod.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{}, nil)
+	err := dmarcMod.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{})
 	assert.NilError(t, err)
-	res, _, status, _ := dmarcMod.Lookup(resolver, "_dmarc.zdns-testing.com", "")
+	res, _, status, _ := dmarcMod.Lookup(resolver, "_dmarc.zdns-testing.com", nil)
 	assert.Equal(t, queries[0].Class, uint16(dns.ClassINET))
 	assert.Equal(t, queries[0].Type, dns.TypeTXT)
 	assert.Equal(t, queries[0].Name, "_dmarc.zdns-testing.com")
-	assert.Equal(t, queries[0].NameServer, "127.0.0.1")
+	assert.Equal(t, queries[0].NameServer.String(), "127.0.0.1:53")
 
 	assert.Equal(t, zdns.StatusNoRecord, status)
 	assert.Equal(t, res.(Result).Dmarc, "")
@@ -167,13 +172,13 @@ func TestDmarcLookup_NotValid_3(t *testing.T) {
 			zdns.Answer{Name: "_dmarc.zdns-testing.com", Answer: "v=DMARc1. p=none; rua=mailto:postmaster@censys.io"}},
 	}
 	dmarcMod := DmarcLookupModule{}
-	err := dmarcMod.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{}, nil)
+	err := dmarcMod.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{})
 	assert.NilError(t, err)
-	res, _, status, _ := dmarcMod.Lookup(resolver, "_dmarc.zdns-testing.com", "")
+	res, _, status, _ := dmarcMod.Lookup(resolver, "_dmarc.zdns-testing.com", nil)
 	assert.Equal(t, queries[0].Class, uint16(dns.ClassINET))
 	assert.Equal(t, queries[0].Type, dns.TypeTXT)
 	assert.Equal(t, queries[0].Name, "_dmarc.zdns-testing.com")
-	assert.Equal(t, queries[0].NameServer, "127.0.0.1")
+	assert.Equal(t, queries[0].NameServer.String(), "127.0.0.1:53")
 
 	assert.Equal(t, zdns.StatusNoRecord, status)
 	assert.Equal(t, res.(Result).Dmarc, "")

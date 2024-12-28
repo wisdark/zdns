@@ -13,7 +13,19 @@
  */
 package zdns
 
-import "fmt"
+import (
+	"fmt"
+	"net"
+
+	"github.com/zmap/zdns/src/internal/util"
+)
+
+const (
+	DoHProtocol = "DoH"
+	DoTProtocol = "DoT"
+	UDPProtocol = "udp"
+	TCPProtocol = "tcp"
+)
 
 type transportMode int
 
@@ -21,6 +33,12 @@ const (
 	UDPOrTCP transportMode = iota
 	UDPOnly
 	TCPOnly
+)
+
+const (
+	DefaultDNSPort = 53
+	DefaultDoHPort = 443
+	DefaultDoTPort = 853
 )
 
 func GetTransportMode(useUDP, useTCP bool) transportMode {
@@ -67,4 +85,84 @@ func (ivm IPVersionMode) IsValid() (bool, string) {
 		return false, fmt.Sprintf("invalid ip version mode: %d", ivm)
 	}
 	return true, ""
+}
+
+type IterationIPPreference int
+
+const (
+	PreferIPv4 IterationIPPreference = iota
+	PreferIPv6
+)
+
+func GetIterationIPPreference(preferIPv4, preferIPv6 bool) IterationIPPreference {
+	if preferIPv4 {
+		return PreferIPv4
+	} else if preferIPv6 {
+		return PreferIPv6
+	}
+	return PreferIPv4
+}
+
+func (iip IterationIPPreference) IsValid() (bool, string) {
+	isValid := iip >= 0 && iip <= 1
+	if !isValid {
+		return false, fmt.Sprintf("invalid iteration ip preference: %d", iip)
+	}
+	return true, ""
+}
+
+type NameServer struct {
+	IP         net.IP // ip address, required
+	Port       uint16 // udp/tcp port
+	DomainName string // used for SNI with TLS, required if you want to validate server certs
+}
+
+func (ns *NameServer) String() string {
+	if ns == nil || ns.IP == nil {
+		return ""
+	}
+	if ns.IP.To4() != nil {
+		return fmt.Sprintf("%s:%d", ns.IP.String(), ns.Port)
+	} else if util.IsIPv6(&ns.IP) {
+		return fmt.Sprintf("[%s]:%d", ns.IP.String(), ns.Port)
+	}
+	return ""
+}
+
+func (ns *NameServer) PopulateDefaultPort(usingDoT, usingDoH bool) {
+	if ns.Port != 0 {
+		return
+	} else if usingDoT {
+		ns.Port = DefaultDoTPort
+	} else if usingDoH {
+		ns.Port = DefaultDoHPort
+	} else {
+		ns.Port = DefaultDNSPort
+	}
+}
+
+func (ns *NameServer) IsValid() (bool, string) {
+	if ns.IP == nil {
+		return false, "missing IP address"
+	}
+	if ns.IP != nil && ns.IP.To4() == nil && ns.IP.To16() == nil {
+		return false, "invalid IP address"
+	}
+	if ns.Port == 0 {
+		return false, "missing port"
+	}
+	return true, ""
+}
+
+func (ns *NameServer) DeepCopy() *NameServer {
+	if ns == nil {
+		return nil
+	}
+	ip := make(net.IP, len(ns.IP))
+	copy(ip, ns.IP)
+	return &NameServer{
+		IP:         ip,
+		Port:       ns.Port,
+		DomainName: ns.DomainName,
+	}
 }

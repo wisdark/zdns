@@ -15,16 +15,36 @@
 package zdns
 
 import (
-	"errors"
 	"fmt"
 	"net"
 	"strings"
 
-	"github.com/zmap/dns"
+	"github.com/pkg/errors"
+
+	log "github.com/sirupsen/logrus"
+
+	"github.com/miekg/dns"
 )
 
+const ZDNSVersion = "2.0.0"
+
 func dotName(name string) string {
+	if name == "." {
+		return name
+	}
+
+	if strings.HasSuffix(name, ".") {
+		log.Fatal("name already has trailing dot")
+	}
+
 	return strings.Join([]string{name, "."}, "")
+}
+
+func removeTrailingDotIfNotRoot(name string) string {
+	if name == "." {
+		return name
+	}
+	return strings.TrimSuffix(name, ".")
 }
 
 func TranslateMiekgErrorCode(err int) Status {
@@ -38,8 +58,9 @@ func isStatusAnswer(s Status) bool {
 	return false
 }
 
-func questionFromAnswer(a Answer) Question {
-	return Question{Name: a.Name, Type: a.RrType, Class: a.RrClass}
+// getTryNumber returns the one-indexed try that the lookup succeeded on
+func getTryNumber(totalRetries, retriesRemaining int) int {
+	return totalRetries - retriesRemaining + 1
 }
 
 func nameIsBeneath(name, layer string) (bool, string) {
@@ -56,11 +77,66 @@ func nameIsBeneath(name, layer string) (bool, string) {
 	return false, ""
 }
 
+func checkGlue(server string, result *SingleQueryResult, ipMode IPVersionMode, ipPreference IterationIPPreference) (*SingleQueryResult, Status) {
+	var ansType string
+	if ipMode == IPv4Only {
+		ansType = "A"
+	} else if ipMode == IPv6Only {
+		ansType = "AAAA"
+	} else if ipPreference == PreferIPv4 {
+		// must be using either IPv4 or IPv6
+		ansType = "A"
+	} else if ipPreference == PreferIPv6 {
+		// must be using either IPv4 or IPv6
+		ansType = "AAAA"
+	} else {
+		log.Fatal("should never hit this case in check glue: ", ipMode, ipPreference)
+	}
+	res, status := checkGlueHelper(server, ansType, result)
+	if status == StatusNoError || ipMode != IPv4OrIPv6 {
+		// If we have a valid answer, or we're not looking for both A and AAAA records, return
+		return res, status
+	}
+	// If we're looking for both A and AAAA records, and we didn't find an answer, try the other type
+	if ansType == "A" {
+		ansType = "AAAA"
+	} else {
+		ansType = "A"
+	}
+	return checkGlueHelper(server, ansType, result)
+}
+
+func checkGlueHelper(server, ansType string, result *SingleQueryResult) (*SingleQueryResult, Status) {
+	for _, additional := range result.Additionals {
+		ans, ok := additional.(Answer)
+		if !ok {
+			continue
+		}
+		// sanitize case and trailing dot
+		// RFC 4343 - states DNS names are case-insensitive
+		if ans.Type == ansType && strings.EqualFold(strings.TrimSuffix(ans.Name, "."), server) {
+			var retv SingleQueryResult
+			retv.Authorities = make([]interface{}, 0)
+			retv.Answers = make([]interface{}, 0, 1)
+			retv.Additionals = make([]interface{}, 0)
+			retv.Answers = append(retv.Answers, ans)
+			return &retv, StatusNoError
+		}
+	}
+	return nil, StatusError
+}
+
+// nextAuthority returns the next authority to query based on the current name and layer
+// Example: nextAuthority("www.google.com", ".") -> "com"
 func nextAuthority(name, layer string) (string, error) {
 	// We are our own authority for PTRs
 	// (This is dealt with elsewhere)
 	if strings.HasSuffix(name, "in-addr.arpa") && layer == "." {
 		return "in-addr.arpa", nil
+	}
+
+	if name == "." && layer == "." {
+		return ".", nil
 	}
 
 	idx := strings.LastIndex(name, ".")
@@ -72,10 +148,10 @@ func nextAuthority(name, layer string) (string, error) {
 	}
 
 	if !strings.HasSuffix(name, layer) {
-		return "", errors.New("server did not provide appropriate resolvers to continue recursion")
+		return "", errors.New("Server did not provide appropriate resolvers to continue recursion")
 	}
 
-	// Limit the search space to the prefix of the string that isnt layer
+	// Limit the search space to the prefix of the string that isn't layer
 	idx = strings.LastIndex(name, layer) - 1
 	if idx < 0 || (idx+1) >= len(name) {
 		// Out of bounds. We are our own authority
@@ -85,25 +161,6 @@ func nextAuthority(name, layer string) (string, error) {
 	idx = strings.LastIndex(name[0:idx], ".")
 	next := name[idx+1:]
 	return next, nil
-}
-
-func checkGlue(server string, result SingleQueryResult) (SingleQueryResult, Status) {
-	for _, additional := range result.Additional {
-		ans, ok := additional.(Answer)
-		if !ok {
-			continue
-		}
-		if ans.Type == "A" && strings.TrimSuffix(ans.Name, ".") == server {
-			var retv SingleQueryResult
-			retv.Authorities = make([]interface{}, 0)
-			retv.Answers = make([]interface{}, 0)
-			retv.Additional = make([]interface{}, 0)
-			retv.Answers = append(retv.Answers, ans)
-			return retv, StatusNoError
-		}
-	}
-	var r SingleQueryResult
-	return r, StatusError
 }
 
 func makeVerbosePrefix(depth int) string {
@@ -152,10 +209,12 @@ func TranslateDNSErrorCode(err int) Status {
 }
 
 // handleStatus is a helper function to deal with a status and error. Error is only returned if the status is an
-// Iterative Timeout
-func handleStatus(status *Status, err error) (*Status, error) {
-	switch *status {
+// Iterative Timeout or NoNeededGlueRecord
+func handleStatus(status Status, err error) (Status, error) {
+	switch status {
 	case StatusIterTimeout:
+		return status, err
+	case StatusNoNeededGlue:
 		return status, err
 	case StatusNXDomain:
 		return status, nil
@@ -178,7 +237,19 @@ func handleStatus(status *Status, err error) (*Status, error) {
 	case StatusIllegalInput:
 		return status, nil
 	default:
-		var s *Status
+		var s Status
 		return s, nil
 	}
+}
+
+// DeepCopyIPs creates a deep copy of a slice of net.IP
+func DeepCopyIPs(ips []net.IP) []net.IP {
+	copied := make([]net.IP, len(ips))
+	for i, ip := range ips {
+		if ip != nil {
+			// Deep copy the IP by copying the underlying byte slice
+			copied[i] = append(net.IP(nil), ip...)
+		}
+	}
+	return copied
 }

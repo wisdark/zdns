@@ -108,38 +108,27 @@ func TestContains(t *testing.T) {
 	}
 }
 
-func TestRemoveDuplicates(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    []int
-		expected []int
-	}{
-		{
-			name:     "No duplicates",
-			input:    []int{1, 2, 3, 4, 5},
-			expected: []int{1, 2, 3, 4, 5},
-		},
-		{
-			name:     "All duplicates",
-			input:    []int{1, 1, 1, 1, 1},
-			expected: []int{1},
-		},
-		{
-			name:     "Some duplicates",
-			input:    []int{1, 2, 2, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5},
-			expected: []int{1, 2, 3, 4, 5},
-		},
-		{
-			name:     "Empty slice",
-			input:    []int{},
-			expected: []int{},
-		},
+func TestConcat(t *testing.T) {
+	inputSlice1 := make([]int, 0, 10)
+	for i := 0; i < 3; i++ {
+		inputSlice1 = append(inputSlice1, i)
 	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			result := RemoveDuplicates(test.input)
-			require.Equal(t, test.expected, result)
-		})
-	}
+	// Test naive append
+	newSlice1 := append(inputSlice1, 4)
+	newSlice2 := append(inputSlice1, 5)
+	newSlice3 := append(inputSlice1, 6)
+	// Shows test is working, you'd think that this would be Equal but it isn't. append() is modifying the inputSlice1
+	require.NotEqual(t, []int{0, 1, 2, 4}, newSlice1)
+	require.NotEqual(t, []int{0, 1, 2, 5}, newSlice2)
+	require.Equal(t, []int{0, 1, 2, 6}, newSlice3)
+	// Now try with new Concat
+	newSlice1 = Concat(inputSlice1, []int{4})
+	newSlice2 = Concat(inputSlice1, []int{5})
+	newSlice3 = Concat(inputSlice1, []int{6})
+	require.Len(t, inputSlice1, 3)
+	require.Equal(t, 10, cap(inputSlice1))
+	require.Equal(t, []int{0, 1, 2}, inputSlice1)
+	require.Equal(t, []int{0, 1, 2, 4}, newSlice1)
+	require.Equal(t, []int{0, 1, 2, 5}, newSlice2)
+	require.Equal(t, []int{0, 1, 2, 6}, newSlice3)
 }

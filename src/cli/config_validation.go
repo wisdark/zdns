@@ -16,39 +16,50 @@ package cli
 import (
 	"fmt"
 	"net"
-	"net/netip"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/miekg/dns"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
-	"github.com/zmap/dns"
-
-	"github.com/zmap/zdns/src/internal/util"
-	"github.com/zmap/zdns/src/zdns"
 )
 
-const (
-	// TODO - we'll need to update this when we add IPv6 support
-	loopbackAddrString = "127.0.0.1"
-)
-
-func validateNetworkingConfig(gc *CLIConf) error {
+func populateNetworkingConfig(gc *CLIConf) error {
 	// mutually exclusive CLI options
 	if gc.LocalIfaceString != "" && gc.LocalAddrString != "" {
 		return errors.New("--local-addr and --local-interface cannot both be specified")
 	}
 
-	// Note: we rely on the value of gc.UsingLoopbackNameServer set here, so this must be called first before other validation
-	if err := validateNameServers(gc); err != nil {
-		return errors.Wrap(err, "name servers did not pass validation")
+	if gc.DNSOverHTTPS && gc.IterativeResolution {
+		return errors.New("--https and --iterative cannot both be specified")
+	}
+
+	if gc.DNSOverTLS && gc.IterativeResolution {
+		return errors.New("--tls and --iterative cannot both be specified")
+	}
+
+	if gc.UDPOnly && gc.DNSOverHTTPS {
+		return errors.New("--udp-only and --https cannot both be specified")
+	}
+
+	if gc.UDPOnly && gc.DNSOverTLS {
+		return errors.New("--udp-only and --tls cannot both be specified")
+	}
+
+	if gc.DNSOverHTTPS && gc.DNSOverTLS {
+		return errors.New("--https and --tls cannot both be specified")
+	}
+
+	if err := parseNameServers(gc); err != nil {
+		return errors.Wrap(err, "name servers could not be parsed")
 	}
 
 	if err := validateClientSubnetString(gc); err != nil {
 		return errors.Wrap(err, "client subnet did not pass validation")
 	}
 
+	// local address - the user can enter both IPv4 and IPv6 addresses. We'll differentiate them later
 	if GC.LocalAddrString != "" {
 		for _, la := range strings.Split(GC.LocalAddrString, ",") {
 			ip := net.ParseIP(la)
@@ -58,22 +69,14 @@ func validateNetworkingConfig(gc *CLIConf) error {
 				return fmt.Errorf("invalid argument for --local-addr (%v). Must be a comma-separated list of valid IP addresses", la)
 			}
 		}
-		log.Info("using local address: ", GC.LocalAddrString)
 		gc.LocalAddrSpecified = true
 	}
 
+	// local interface - same as local addresses, an interface could have both IPv4 and IPv6 addresses, we'll differentiate them later
 	if gc.LocalIfaceString != "" {
 		li, err := net.InterfaceByName(gc.LocalIfaceString)
 		if err != nil {
 			return fmt.Errorf("invalid local interface specified: %v", err)
-		}
-		// net.FlagLoopback is a bitmask, so we need to check if the loopback flag is set
-		ifaceLoopbackFlag := li.Flags & net.FlagLoopback
-		isIfaceLoopback := ifaceLoopbackFlag != 0
-		// if we're using the loopback nameserver, make sure we're using the loopback interface
-		// Vice-versa for a non-loopback nameserver
-		if isIfaceLoopback != gc.UsingLoopbackNameServer {
-			return fmt.Errorf("cannot mix loopback/non-loopback nameservers (%v) and interface (%s)", gc.NameServers, gc.LocalIfaceString)
 		}
 		addrs, err := li.Addrs()
 		if err != nil {
@@ -85,37 +88,12 @@ func validateNetworkingConfig(gc *CLIConf) error {
 			if err != nil {
 				return fmt.Errorf("unable to parse IP address from interface %s: %v", gc.LocalIfaceString, err)
 			}
-			if ip.To4() == nil {
-				// skip IPv6 addresses
-				// TODO - we'll need to update this when we add IPv6 support
-				log.Infof("interface %s has IPv6 address %s, skipping since unsupported", gc.LocalIfaceString, ip.String())
-				continue
-			}
 			gc.LocalAddrs = append(gc.LocalAddrs, ip)
 			gc.LocalAddrSpecified = true
 		}
 		log.Info("using local interface: ", gc.LocalIfaceString)
 	}
 
-	if gc.UsingLoopbackNameServer && !gc.LocalAddrSpecified {
-		// set local addr as loopback if we're using the loopback name server
-		gc.LocalAddrs = []net.IP{net.ParseIP(loopbackAddrString)}
-		gc.LocalAddrSpecified = true
-	}
-
-	if !gc.LocalAddrSpecified {
-		// Find non-loopback local address for use in any socket connections
-		conn, err := net.Dial("udp", "8.8.8.8:53")
-		if err != nil {
-			return fmt.Errorf("unable to find default IP address: %v", err)
-		}
-		gc.LocalAddrs = append(gc.LocalAddrs, conn.LocalAddr().(*net.UDPAddr).IP)
-		err = conn.Close()
-		if err != nil {
-			log.Warn("unable to close test connection to Google Public DNS: ", err)
-		}
-	}
-	log.Infof("using local address(es): %v", gc.LocalAddrs)
 	return nil
 }
 
@@ -149,30 +127,12 @@ func validateClientSubnetString(gc *CLIConf) error {
 	return nil
 }
 
-func validateNameServers(gc *CLIConf) error {
-	if gc.LookupAllNameServers && gc.NameServersString != "" {
-		log.Fatal("name servers cannot be specified in --all-nameservers mode.")
-	}
-
-	if gc.NameServersString == "" {
-		// if we're doing recursive resolution, figure out default OS name servers
-		// otherwise, use the set of 13 root name servers
-		if gc.IterativeResolution {
-			gc.NameServers = zdns.RootServers[:]
-		} else {
-			ns, err := zdns.GetDNSServers(gc.ConfigFilePath)
-			if err != nil {
-				ns = util.GetDefaultResolvers()
-				log.Warn("Unable to parse resolvers file. Using ZDNS defaults: ", strings.Join(ns, ", "))
-			}
-			gc.NameServers = ns
-		}
-		log.Info("No name servers specified. will use: ", strings.Join(gc.NameServers, ", "))
-	} else {
+func parseNameServers(gc *CLIConf) error {
+	if gc.NameServersString != "" {
 		if gc.NameServerMode {
 			log.Fatal("name servers cannot be specified on command line in --name-server-mode")
 		}
-		var ns []string
+		var nses []string
 		if (gc.NameServersString)[0] == '@' {
 			filepath := (gc.NameServersString)[1:]
 			f, err := os.ReadFile(filepath)
@@ -182,43 +142,16 @@ func validateNameServers(gc *CLIConf) error {
 			if len(f) == 0 {
 				log.Fatalf("Empty file (%s)", filepath)
 			}
-			ns = strings.Split(strings.Trim(string(f), "\n"), "\n")
+			nses = strings.Split(strings.Trim(string(f), "\n"), "\n")
 		} else {
-			ns = strings.Split(gc.NameServersString, ",")
-		}
-		for i, s := range ns {
-			nsWithPort, err := util.AddDefaultPortToDNSServerName(s)
-			if err != nil {
-				log.Fatalf("unable to parse name server: %s", s)
+			nses = strings.Split(gc.NameServersString, ",")
+			trimmedNSes := make([]string, 0, len(nses))
+			for _, ns := range nses {
+				trimmedNSes = append(trimmedNSes, strings.TrimSpace(ns))
 			}
-			ns[i] = nsWithPort
+			nses = trimmedNSes
 		}
-		if len(ns) == 0 {
-			return fmt.Errorf("no valid name servers specified: %v", ns)
-		}
-		gc.NameServers = ns
-	}
-
-	// Potentially, a name-server could be listed multiple times by either the user or in the OS's respective /etc/resolv.conf
-	// De-dupe
-	gc.NameServers = util.RemoveDuplicates(gc.NameServers)
-
-	// Check if any of the name servers are in the loopback subnet
-	gc.UsingLoopbackNameServer = false
-	numberOfLoopbackNameServers := 0
-	for _, ns := range gc.NameServers {
-		ip, err := netip.ParseAddr(strings.Split(ns, ":")[0])
-		if err != nil {
-			return errors.Wrapf(err, "could not parse nameserver: %s", ns)
-		}
-		if ip.IsLoopback() {
-			gc.UsingLoopbackNameServer = true
-			numberOfLoopbackNameServers++
-		}
-	}
-
-	if gc.UsingLoopbackNameServer && len(gc.NameServers) > numberOfLoopbackNameServers {
-		return fmt.Errorf("cannot use a loopback nameserver with non-loopback nameservers (%v). Please specify with --name-servers one or the other", gc.NameServers)
+		gc.NameServers = nses
 	}
 	return nil
 }

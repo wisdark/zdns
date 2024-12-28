@@ -16,75 +16,38 @@ package util
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"regexp"
-	"strings"
+	"strconv"
 
 	"github.com/pkg/errors"
-
-	log "github.com/sirupsen/logrus"
-	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
-	"github.com/spf13/viper"
 )
 
 const (
 	EnvPrefix              = "ZDNS"
 	DefaultFilePermissions = 0644 // rw-r--r--
+	DefaultDNSPort         = "53"
+	DefaultHTTPSPort       = "443"
+	DefaultTLSPort         = "853"
 )
 
-func AddDefaultPortToDNSServerName(inAddr string) (string, error) {
-	// Try to split host and port to see if the port is already specified.
-	host, port, err := net.SplitHostPort(inAddr)
+func SplitHostPort(inaddr string) (net.IP, int, error) {
+	host, port, err := net.SplitHostPort(inaddr)
 	if err != nil {
-		// might mean there's no port specified
-		host = inAddr
+		return nil, 0, err
 	}
 
-	// Validate the host part as an IP address.
 	ip := net.ParseIP(host)
 	if ip == nil {
-		return "", errors.New("invalid IP address")
+		return nil, 0, errors.Wrap(err, "invalid IP address")
 	}
 
-	// If the original input does not have a port, specify port 53
-	if port == "" {
-		port = "53"
+	portInt, err := strconv.Atoi(port)
+	if err != nil {
+		return nil, 0, errors.Wrap(err, "invalid port")
 	}
 
-	return net.JoinHostPort(ip.String(), port), nil
-}
-
-// Reference: https://github.com/carolynvs/stingoftheviper/blob/main/main.go
-// For how to make cobra/viper sync up, and still use custom struct
-// Bind each cobra flag to its associated viper configuration (config file and environment variable)
-func BindFlags(cmd *cobra.Command, v *viper.Viper, envPrefix string) {
-	cmd.Flags().VisitAll(func(f *pflag.Flag) {
-		// Environment variables can't have dashes in them, so bind them to their equivalent
-		// keys with underscores, e.g. --alexa to ZDNS_ALEXA
-		if strings.Contains(f.Name, "-") {
-			envVarSuffix := strings.ToUpper(strings.ReplaceAll(f.Name, "-", "_"))
-			err := v.BindEnv(f.Name, fmt.Sprintf("%s_%s", envPrefix, envVarSuffix))
-			if err != nil {
-				log.Fatal("failed to bind environment variable to flag: ", err)
-			}
-		}
-
-		// Apply the viper config value to the flag when the flag is not set and viper has a value
-		if !f.Changed && v.IsSet(f.Name) {
-			val := v.Get(f.Name)
-			err := cmd.Flags().Set(f.Name, fmt.Sprintf("%v", val))
-			if err != nil {
-				log.Fatalf("failed to set flag (%s) value: %v", f.Name, err)
-			}
-		}
-	})
-}
-
-// getDefaultResolvers returns a slice of default DNS resolvers to be used when no system resolvers could be discovered.
-func GetDefaultResolvers() []string {
-	return []string{"8.8.8.8:53", "8.8.4.4:53", "1.1.1.1:53", "1.0.0.1:53"}
+	return ip, portInt, nil
 }
 
 // IsStringValidDomainName checks if the given string is a valid domain name using regex
@@ -94,9 +57,9 @@ func IsStringValidDomainName(domain string) bool {
 }
 
 // HasCtxExpired checks if the context has expired. Common function used in various places.
-func HasCtxExpired(ctx *context.Context) bool {
+func HasCtxExpired(ctx context.Context) bool {
 	select {
-	case <-(*ctx).Done():
+	case <-(ctx).Done():
 		return true
 	default:
 		return false
@@ -115,14 +78,28 @@ func Contains[T comparable](slice []T, entity T) bool {
 	return false
 }
 
-func RemoveDuplicates[T comparable](slice []T) []T {
-	lookup := make(map[T]struct{}, len(slice)) // prealloc for performance
-	result := make([]T, 0, len(slice))
-	for _, v := range slice {
-		if _, ok := lookup[v]; !ok {
-			lookup[v] = struct{}{}
-			result = append(result, v)
+// Concat returns a new slice concatenating the passed in slices.
+//
+// Avoids a gotcha in Go where since append modifies the underlying memory of the input slice, doing
+// newSlice := append(slice1, slice2) can modify slice1. See https://go.dev/doc/effective_go#append
+// A std. library concat was added in go 1.22, but this is for backwards compatibility. https://pkg.go.dev/slices#Concat
+// This is mostly similiar to the std. library concat, but with a few differences so it compiles on go 1.20.
+func Concat[S ~[]E, E any](slices ...S) S {
+	size := 0
+	for _, s := range slices {
+		size += len(s)
+		if size < 0 {
+			panic("len out of range")
 		}
 	}
-	return result
+	newSlice := make([]E, 0, size)
+	for _, s := range slices {
+		newSlice = append(newSlice, s...)
+	}
+	return newSlice
+}
+
+// IsIPv6 checks if the given IP address is an IPv6 address.
+func IsIPv6(ip *net.IP) bool {
+	return ip != nil && ip.To4() == nil && ip.To16() != nil
 }

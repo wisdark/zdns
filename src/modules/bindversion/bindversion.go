@@ -15,8 +15,10 @@
 package bindversion
 
 import (
-	"github.com/spf13/pflag"
-	"github.com/zmap/dns"
+	"context"
+
+	"github.com/miekg/dns"
+	"github.com/pkg/errors"
 
 	"github.com/zmap/zdns/src/cli"
 	"github.com/zmap/zdns/src/zdns"
@@ -42,21 +44,40 @@ func init() {
 }
 
 // CLIInit initializes the BindVersion lookup module
-func (bindVersionMod *BindVersionLookupModule) CLIInit(gc *cli.CLIConf, rc *zdns.ResolverConfig, flags *pflag.FlagSet) error {
-	return bindVersionMod.BasicLookupModule.CLIInit(gc, rc, flags)
+func (bindVersionMod *BindVersionLookupModule) CLIInit(gc *cli.CLIConf, rc *zdns.ResolverConfig) error {
+	if gc.LookupAllNameServers {
+		return errors.New("AXFR module does not support --all-nameservers")
+	}
+	return bindVersionMod.BasicLookupModule.CLIInit(gc, rc)
 }
 
-func (bindVersionMod *BindVersionLookupModule) Lookup(r *zdns.Resolver, lookupName, nameServer string) (interface{}, zdns.Trace, zdns.Status, error) {
+func (bindVersionMod *BindVersionLookupModule) Lookup(r *zdns.Resolver, lookupName string, nameServer *zdns.NameServer) (interface{}, zdns.Trace, zdns.Status, error) {
 	var innerRes *zdns.SingleQueryResult
 	var trace zdns.Trace
 	var status zdns.Status
 	var err error
 	if bindVersionMod.IsIterative {
-		innerRes, trace, status, err = r.IterativeLookup(&zdns.Question{Name: BindVersionQueryName, Type: dns.TypeTXT, Class: dns.ClassCHAOS})
+		innerRes, trace, status, err = r.IterativeLookup(context.Background(), &zdns.Question{Name: BindVersionQueryName, Type: dns.TypeTXT, Class: dns.ClassCHAOS})
 	} else {
-		innerRes, trace, status, err = r.ExternalLookup(&zdns.Question{Name: BindVersionQueryName, Type: dns.TypeTXT, Class: dns.ClassCHAOS}, nameServer)
+		innerRes, trace, status, err = r.ExternalLookup(context.Background(), &zdns.Question{Name: BindVersionQueryName, Type: dns.TypeTXT, Class: dns.ClassCHAOS}, nameServer)
 	}
 	resString, resStatus, err := zdns.CheckTxtRecords(innerRes, status, nil, err)
 	res := Result{BindVersion: resString}
 	return res, trace, resStatus, err
+}
+
+func (bindVersionMod *BindVersionLookupModule) Help() string {
+	return ""
+}
+
+func (bindVersionMod *BindVersionLookupModule) GetDescription() string {
+	return ""
+}
+
+func (bindVersionMod *BindVersionLookupModule) Validate(args []string) error {
+	return nil
+}
+
+func (bindVersionMod *BindVersionLookupModule) NewFlags() interface{} {
+	return bindVersionMod
 }

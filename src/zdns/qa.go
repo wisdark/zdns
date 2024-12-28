@@ -26,6 +26,12 @@ type DNSFlags struct {
 	ErrorCode          int  `json:"error_code" groups:"flags,long,trace"`
 }
 
+// QuestionWithMetadata wraps a DNS question with other metadata to be used in the lookup process
+type QuestionWithMetadata struct {
+	Q                Question
+	RetriesRemaining *int // number of retries available
+}
+
 type Question struct {
 	Type  uint16
 	Class uint16
@@ -46,40 +52,48 @@ type TraceStep struct {
 	Try        int               `json:"try" groups:"trace"`
 }
 
-// Result contains all the metadata from a complete lookup, potentailly after following many CNAMEs/etc.
+// Result contains all the metadata from a complete lookup(s) for a name. Results is keyed with the ModuleName.
 type Result struct {
-	AlteredName string      `json:"altered_name,omitempty" groups:"short,normal,long,trace"`
-	Name        string      `json:"name,omitempty" groups:"short,normal,long,trace"`
-	Nameserver  string      `json:"nameserver,omitempty" groups:"normal,long,trace"`
-	Class       string      `json:"class,omitempty" groups:"long,trace"`
-	AlexaRank   int         `json:"alexa_rank,omitempty" groups:"short,normal,long,trace"`
-	Metadata    string      `json:"metadata,omitempty" groups:"short,normal,long,trace"`
-	Status      string      `json:"status,omitempty" groups:"short,normal,long,trace"`
-	Error       string      `json:"error,omitempty" groups:"short,normal,long,trace"`
-	Timestamp   string      `json:"timestamp,omitempty" groups:"short,normal,long,trace"`
-	Data        interface{} `json:"data,omitempty" groups:"short,normal,long,trace"`
-	Trace       Trace       `json:"trace,omitempty" groups:"trace"`
+	AlteredName string                        `json:"altered_name,omitempty" groups:"short,normal,long,trace"`
+	Name        string                        `json:"name,omitempty" groups:"short,normal,long,trace"`
+	Nameserver  string                        `json:"nameserver,omitempty" groups:"normal,long,trace"`
+	Class       string                        `json:"class,omitempty" groups:"long,trace"`
+	AlexaRank   int                           `json:"alexa_rank,omitempty" groups:"short,normal,long,trace"`
+	Metadata    string                        `json:"metadata,omitempty" groups:"short,normal,long,trace"`
+	Results     map[string]SingleModuleResult `json:"results,omitempty" groups:"short,normal,long,trace"`
+}
+
+// SingleModuleResult contains all the metadata from a complete lookup for a name, potentially after following many CNAMEs/etc.
+type SingleModuleResult struct {
+	Status    string      `json:"status,omitempty" groups:"short,normal,long,trace"`
+	Error     string      `json:"error,omitempty" groups:"short,normal,long,trace"`
+	Timestamp string      `json:"timestamp,omitempty" groups:"short,normal,long,trace"`
+	Duration  float64     `json:"duration,omitempty" groups:"short,normal,long,trace"` // in seconds
+	Data      interface{} `json:"data,omitempty" groups:"short,normal,long,trace"`
+	Trace     Trace       `json:"trace,omitempty" groups:"trace"`
 }
 
 // SingleQueryResult contains the results of a single DNS query
 type SingleQueryResult struct {
-	Answers     []interface{} `json:"answers,omitempty" groups:"short,normal,long,trace"`
-	Additional  []interface{} `json:"additionals,omitempty" groups:"short,normal,long,trace"`
-	Authorities []interface{} `json:"authorities,omitempty" groups:"short,normal,long,trace"`
-	Protocol    string        `json:"protocol" groups:"protocol,normal,long,trace"`
-	Resolver    string        `json:"resolver" groups:"resolver,normal,long,trace"`
-	Flags       DNSFlags      `json:"flags" groups:"flags,long,trace"`
+	Answers            []interface{} `json:"answers,omitempty" groups:"short,normal,long,trace"`
+	Additionals        []interface{} `json:"additionals,omitempty" groups:"short,normal,long,trace"`
+	Authorities        []interface{} `json:"authorities,omitempty" groups:"short,normal,long,trace"`
+	Protocol           string        `json:"protocol" groups:"protocol,normal,long,trace"`
+	Resolver           string        `json:"resolver" groups:"resolver,normal,long,trace"` // IP address
+	Flags              DNSFlags      `json:"flags" groups:"flags,long,trace"`
+	DNSSECResult       *DNSSECResult `json:"dnssec,omitempty" groups:"dnssec,normal,long,trace"`
+	TLSServerHandshake interface{}   `json:"tls_handshake,omitempty" groups:"normal,long,trace"` // used for --tls and --https, JSON string of the TLS handshake
 }
 
 type ExtendedResult struct {
+	Type       string            `json:"type" groups:"short,normal,long,trace"`
 	Res        SingleQueryResult `json:"result,omitempty" groups:"short,normal,long,trace"`
 	Status     Status            `json:"status" groups:"short,normal,long,trace"`
-	Nameserver string            `json:"nameserver" groups:"short,normal,long,trace"`
-	Trace      Trace             `json:"trace,omitempty" groups:"trace"`
+	Nameserver string            `json:"nameserver" groups:"short,normal,long,trace"` // NS name queried for this result
 }
 
-type CombinedResults struct {
-	Results []ExtendedResult `json:"results" groups:"short,normal,long,trace"`
+type AllNameServersResult struct {
+	LayeredResponses map[string][]ExtendedResult `json:"per_layer_responses" groups:"short,normal,long,trace"`
 }
 
 type IPResult struct {

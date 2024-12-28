@@ -14,11 +14,11 @@
 package zdns
 
 import (
+	"context"
 	"strings"
 
+	"github.com/miekg/dns"
 	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
-	"github.com/zmap/dns"
 )
 
 /*
@@ -40,13 +40,12 @@ type NSResult struct {
 }
 
 // DoNSLookup performs a DNS NS lookup on the given name against the given name server.
-func (r *Resolver) DoNSLookup(lookupName, nameServer string, isIterative bool) (*NSResult, Trace, Status, error) {
-	if !isIterative && len(nameServer) == 0 {
-		nameServer = r.randomExternalNameServer()
-		log.Info("no name server provided for external NS lookup, using random external name server: ", nameServer)
-	}
+func (r *Resolver) DoNSLookup(lookupName string, nameServer *NameServer, isIterative, lookupA, lookupAAAA bool) (*NSResult, Trace, Status, error) {
 	if len(lookupName) == 0 {
 		return nil, nil, "", errors.New("no name provided for NS lookup")
+	}
+	if !lookupA && !lookupAAAA {
+		return nil, nil, "", errors.New("must lookup either A or AAAA")
 	}
 
 	var trace Trace
@@ -54,9 +53,9 @@ func (r *Resolver) DoNSLookup(lookupName, nameServer string, isIterative bool) (
 	var status Status
 	var err error
 	if isIterative {
-		ns, trace, status, err = r.IterativeLookup(&Question{Name: lookupName, Type: dns.TypeNS, Class: dns.ClassINET})
+		ns, trace, status, err = r.IterativeLookup(context.Background(), &Question{Name: lookupName, Type: dns.TypeNS, Class: dns.ClassINET})
 	} else {
-		ns, trace, status, err = r.ExternalLookup(&Question{Name: lookupName, Type: dns.TypeNS, Class: dns.ClassINET}, nameServer)
+		ns, trace, status, err = r.ExternalLookup(context.Background(), &Question{Name: lookupName, Type: dns.TypeNS, Class: dns.ClassINET}, nameServer)
 
 	}
 
@@ -66,7 +65,7 @@ func (r *Resolver) DoNSLookup(lookupName, nameServer string, isIterative bool) (
 	}
 	ipv4s := make(map[string][]string)
 	ipv6s := make(map[string][]string)
-	for _, ans := range ns.Additional {
+	for _, ans := range ns.Additionals {
 		a, ok := ans.(Answer)
 		if !ok {
 			continue
@@ -98,17 +97,14 @@ func (r *Resolver) DoNSLookup(lookupName, nameServer string, isIterative bool) (
 		var findIpv4 = false
 		var findIpv6 = false
 
-		lookupIPv4 := r.ipVersionMode == IPv4Only || r.ipVersionMode == IPv4OrIPv6
-		lookupIPv6 := r.ipVersionMode == IPv6Only || r.ipVersionMode == IPv4OrIPv6
-
-		if lookupIPv4 {
+		if lookupA {
 			if ips, ok := ipv4s[rec.Name]; ok {
 				rec.IPv4Addresses = ips
 			} else {
 				findIpv4 = true
 			}
 		}
-		if lookupIPv6 {
+		if lookupAAAA {
 			if ips, ok := ipv6s[rec.Name]; ok {
 				rec.IPv6Addresses = ips
 			} else {
@@ -116,7 +112,7 @@ func (r *Resolver) DoNSLookup(lookupName, nameServer string, isIterative bool) (
 			}
 		}
 		if findIpv4 || findIpv6 {
-			res, nextTrace, _, _ := r.DoTargetedLookup(rec.Name, nameServer, r.ipVersionMode, false)
+			res, nextTrace, _, _ := r.DoTargetedLookup(rec.Name, nameServer, false, lookupA, lookupAAAA)
 			if res != nil {
 				if findIpv4 {
 					rec.IPv4Addresses = res.IPv4Addresses

@@ -16,15 +16,14 @@ package alookup
 
 import (
 	"github.com/pkg/errors"
-	"github.com/spf13/pflag"
 
 	"github.com/zmap/zdns/src/cli"
 	"github.com/zmap/zdns/src/zdns"
 )
 
 type ALookupModule struct {
-	IPv4Lookup bool
-	IPv6Lookup bool
+	IPv4Lookup bool `long:"ipv4-lookup" description:"perform A lookups for each server"`
+	IPv6Lookup bool `long:"ipv6-lookup" description:"perform AAAA lookups for each server"`
 	baseModule cli.BasicLookupModule
 }
 
@@ -34,17 +33,12 @@ func init() {
 }
 
 // CLIInit initializes the ALookupModule with the given parameters, used to call ALOOKUP from the command line
-func (aMod *ALookupModule) CLIInit(gc *cli.CLIConf, resolverConfig *zdns.ResolverConfig, f *pflag.FlagSet) error {
-	ipv4Lookup, err := f.GetBool("ipv4-lookup")
-	if err != nil {
-		return errors.Wrap(err, "failed to get ipv4-lookup flag")
+func (aMod *ALookupModule) CLIInit(gc *cli.CLIConf, resolverConfig *zdns.ResolverConfig) error {
+	if gc.LookupAllNameServers {
+		return errors.New("ALOOKUP module does not support --all-nameservers")
 	}
-	ipv6Lookup, err := f.GetBool("ipv6-lookup")
-	if err != nil {
-		return errors.Wrap(err, "failed to get ipv6-lookup flag")
-	}
-	aMod.Init(ipv4Lookup, ipv6Lookup)
-	err = aMod.baseModule.CLIInit(gc, resolverConfig, f)
+	aMod.Init(aMod.IPv4Lookup, aMod.IPv6Lookup)
+	err := aMod.baseModule.CLIInit(gc, resolverConfig)
 	if err != nil {
 		return errors.Wrap(err, "failed to initialize base module")
 	}
@@ -57,12 +51,23 @@ func (aMod *ALookupModule) Init(ipv4Lookup bool, ipv6Lookup bool) {
 	aMod.IPv6Lookup = ipv6Lookup
 }
 
-func (aMod *ALookupModule) Lookup(r *zdns.Resolver, lookupName, nameServer string) (interface{}, zdns.Trace, zdns.Status, error) {
-	ipResult, trace, status, err := r.DoTargetedLookup(lookupName, nameServer, zdns.GetIPVersionMode(aMod.IPv4Lookup, aMod.IPv6Lookup), aMod.baseModule.IsIterative)
+func (aMod *ALookupModule) Lookup(r *zdns.Resolver, lookupName string, nameServer *zdns.NameServer) (interface{}, zdns.Trace, zdns.Status, error) {
+	ipResult, trace, status, err := r.DoTargetedLookup(lookupName, nameServer, aMod.baseModule.IsIterative, aMod.IPv4Lookup, aMod.IPv6Lookup)
 	return ipResult, trace, status, err
 }
 
-// Help returns the module's help string
 func (aMod *ALookupModule) Help() string {
 	return ""
+}
+
+func (aMod *ALookupModule) Validate(args []string) error {
+	return nil
+}
+
+func (aMod *ALookupModule) NewFlags() interface{} {
+	return aMod
+}
+
+func (aMod *ALookupModule) GetDescription() string {
+	return "alookup will get the information that is typically desired, instead of just the information that exists in a single record. Specifically, alookup acts similar to nslookup and will follow CNAME records."
 }

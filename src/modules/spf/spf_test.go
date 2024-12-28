@@ -15,9 +15,11 @@
 package spf
 
 import (
+	"context"
+	"net"
 	"testing"
 
-	"github.com/zmap/dns"
+	"github.com/miekg/dns"
 	"gotest.tools/v3/assert"
 
 	"github.com/zmap/zdns/src/cli"
@@ -26,7 +28,7 @@ import (
 
 type QueryRecord struct {
 	zdns.Question
-	NameServer string
+	NameServer *zdns.NameServer
 }
 
 var mockResults = make(map[string]*zdns.SingleQueryResult)
@@ -34,8 +36,8 @@ var queries []QueryRecord
 
 type MockLookup struct{}
 
-func (ml MockLookup) DoSingleDstServerLookup(r *zdns.Resolver, question zdns.Question, nameServer string, isIterative bool) (*zdns.SingleQueryResult, zdns.Trace, zdns.Status, error) {
-	queries = append(queries, QueryRecord{question, nameServer})
+func (ml MockLookup) DoDstServersLookup(ctx context.Context, r *zdns.Resolver, question zdns.Question, nameServers []zdns.NameServer, isIterative bool) (*zdns.SingleQueryResult, zdns.Trace, zdns.Status, error) {
+	queries = append(queries, QueryRecord{question, &nameServers[0]})
 	if res, ok := mockResults[question.Name]; ok {
 		return res, nil, zdns.StatusNoError, nil
 	} else {
@@ -47,8 +49,11 @@ func InitTest(t *testing.T) *zdns.Resolver {
 	mockResults = make(map[string]*zdns.SingleQueryResult)
 	queries = make([]QueryRecord, 0)
 	rc := zdns.ResolverConfig{
-		ExternalNameServers: []string{"127.0.0.1"},
-		LookupClient:        MockLookup{}}
+		RootNameServersV4:     []zdns.NameServer{{IP: net.ParseIP("127.0.0.53"), Port: 53}},
+		ExternalNameServersV4: []zdns.NameServer{{IP: net.ParseIP("127.0.0.1"), Port: 53}},
+		LocalAddrsV4:          []net.IP{net.ParseIP("127.0.0.1")},
+		IPVersionMode:         zdns.IPv4Only,
+		LookupClient:          MockLookup{}}
 	r, err := zdns.InitResolver(&rc)
 	assert.NilError(t, err)
 
@@ -63,13 +68,13 @@ func TestLookup_DoTxtLookup_Valid_1(t *testing.T) {
 			zdns.Answer{Name: "google.com", Answer: "v=spf1 mx include:_spf.google.com -all"}},
 	}
 	spfModule := SpfLookupModule{}
-	err := spfModule.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{LookupClient: MockLookup{}}, nil)
+	err := spfModule.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{LookupClient: MockLookup{}})
 	assert.NilError(t, err)
-	res, _, status, _ := spfModule.Lookup(resolver, "google.com", "")
+	res, _, status, _ := spfModule.Lookup(resolver, "google.com", nil)
 	assert.Equal(t, queries[0].Class, uint16(dns.ClassINET))
 	assert.Equal(t, queries[0].Type, dns.TypeTXT)
 	assert.Equal(t, queries[0].Name, "google.com")
-	assert.Equal(t, queries[0].NameServer, "127.0.0.1")
+	assert.Equal(t, queries[0].NameServer.String(), "127.0.0.1:53")
 
 	assert.Equal(t, zdns.StatusNoError, status)
 	assert.Equal(t, res.(Result).Spf, "v=spf1 mx include:_spf.google.com -all")
@@ -83,13 +88,13 @@ func TestLookup_DoTxtLookup_Valid_2(t *testing.T) {
 			zdns.Answer{Name: "google.com", Answer: "V=SpF1 mx include:_spf.google.com -all"}},
 	}
 	spfModule := SpfLookupModule{}
-	err := spfModule.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{LookupClient: MockLookup{}}, nil)
+	err := spfModule.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{LookupClient: MockLookup{}})
 	assert.NilError(t, err)
-	res, _, status, _ := spfModule.Lookup(resolver, "google.com", "")
+	res, _, status, _ := spfModule.Lookup(resolver, "google.com", nil)
 	assert.Equal(t, queries[0].Class, uint16(dns.ClassINET))
 	assert.Equal(t, queries[0].Type, dns.TypeTXT)
 	assert.Equal(t, queries[0].Name, "google.com")
-	assert.Equal(t, queries[0].NameServer, "127.0.0.1")
+	assert.Equal(t, queries[0].NameServer.String(), "127.0.0.1:53")
 
 	assert.Equal(t, zdns.StatusNoError, status)
 	assert.Equal(t, res.(Result).Spf, "V=SpF1 mx include:_spf.google.com -all")
@@ -103,13 +108,13 @@ func TestLookup_DoTxtLookup_NotValid_1(t *testing.T) {
 			zdns.Answer{Name: "google.com", Answer: "  V  =  SpF1 mx include:_spf.google.com -all"}},
 	}
 	spfModule := SpfLookupModule{}
-	err := spfModule.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{LookupClient: MockLookup{}}, nil)
+	err := spfModule.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{LookupClient: MockLookup{}})
 	assert.NilError(t, err)
-	res, _, status, _ := spfModule.Lookup(resolver, "google.com", "")
+	res, _, status, _ := spfModule.Lookup(resolver, "google.com", nil)
 	assert.Equal(t, queries[0].Class, uint16(dns.ClassINET))
 	assert.Equal(t, queries[0].Type, dns.TypeTXT)
 	assert.Equal(t, queries[0].Name, "google.com")
-	assert.Equal(t, queries[0].NameServer, "127.0.0.1")
+	assert.Equal(t, queries[0].NameServer.String(), "127.0.0.1:53")
 
 	assert.Equal(t, zdns.StatusNoRecord, status)
 	assert.Equal(t, res.(Result).Spf, "")
@@ -123,13 +128,13 @@ func TestLookup_DoTxtLookup_NotValid_2(t *testing.T) {
 			zdns.Answer{Name: "google.com", Answer: "some other TXT record but no SPF"}},
 	}
 	spfModule := SpfLookupModule{}
-	err := spfModule.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{LookupClient: MockLookup{}}, nil)
+	err := spfModule.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{LookupClient: MockLookup{}})
 	assert.NilError(t, err)
-	res, _, status, _ := spfModule.Lookup(resolver, "google.com", "")
+	res, _, status, _ := spfModule.Lookup(resolver, "google.com", nil)
 	assert.Equal(t, queries[0].Class, uint16(dns.ClassINET))
 	assert.Equal(t, queries[0].Type, dns.TypeTXT)
 	assert.Equal(t, queries[0].Name, "google.com")
-	assert.Equal(t, queries[0].NameServer, "127.0.0.1")
+	assert.Equal(t, queries[0].NameServer.String(), "127.0.0.1:53")
 
 	assert.Equal(t, zdns.StatusNoRecord, status)
 	assert.Equal(t, res.(Result).Spf, "")
@@ -138,13 +143,13 @@ func TestLookup_DoTxtLookup_NotValid_2(t *testing.T) {
 func TestLookup_DoTxtLookup_NoTXT(t *testing.T) {
 	resolver := InitTest(t)
 	spfModule := SpfLookupModule{}
-	err := spfModule.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{LookupClient: MockLookup{}}, nil)
+	err := spfModule.CLIInit(&cli.CLIConf{}, &zdns.ResolverConfig{LookupClient: MockLookup{}})
 	assert.NilError(t, err)
-	res, _, status, _ := spfModule.Lookup(resolver, "example.com", "")
+	res, _, status, _ := spfModule.Lookup(resolver, "example.com", nil)
 	assert.Equal(t, queries[0].Class, uint16(dns.ClassINET))
 	assert.Equal(t, queries[0].Type, dns.TypeTXT)
 	assert.Equal(t, queries[0].Name, "example.com")
-	assert.Equal(t, queries[0].NameServer, "127.0.0.1")
+	assert.Equal(t, queries[0].NameServer.String(), "127.0.0.1:53")
 
 	assert.Equal(t, zdns.StatusNoAnswer, status)
 	assert.Equal(t, res.(Result).Spf, "")

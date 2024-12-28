@@ -19,8 +19,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/spf13/pflag"
-	"github.com/zmap/dns"
+	"github.com/miekg/dns"
 	"gotest.tools/v3/assert"
 
 	"github.com/zmap/zdns/src/cli"
@@ -74,7 +73,7 @@ var nsRecords = make(map[string]*zdns.NSResult)
 var nsStatus = zdns.StatusNoError
 
 // Mock the actual NS lookup.
-func mockNSLookup(r *zdns.Resolver, lookupName, nameServer string) (interface{}, zdns.Trace, zdns.Status, error) {
+func mockNSLookup(r *zdns.Resolver, lookupName string, nameServer *zdns.NameServer) (interface{}, zdns.Trace, zdns.Status, error) {
 	if res, ok := nsRecords[lookupName]; ok {
 		return res, nil, nsStatus, nil
 	} else {
@@ -91,15 +90,15 @@ func InitTest() (*AxfrLookupModule, *zdns.Resolver) {
 	nsStatus = zdns.StatusNoError
 
 	cc := new(cli.CLIConf)
-	cc.NameServers = []string{"127.0.0.1"}
 
 	rc := new(zdns.ResolverConfig)
-	flagSet := new(pflag.FlagSet)
-	flagSet.Bool("ipv4-lookup", false, "Use IPv4")
-	flagSet.Bool("ipv6-lookup", false, "Use IPv6")
-	flagSet.String("blacklist-file", "", "Blacklist")
+	rc.RootNameServersV4 = []zdns.NameServer{{IP: net.ParseIP("127.0.0.53"), Port: 53}}
+	rc.ExternalNameServersV4 = []zdns.NameServer{{IP: net.ParseIP("127.0.0.53"), Port: 53}}
+	rc.LocalAddrsV4 = []net.IP{net.ParseIP("127.0.0.1")}
+	rc.IPVersionMode = zdns.IPv4Only
+
 	axfrMod := new(AxfrLookupModule)
-	err := axfrMod.CLIInit(cc, rc, flagSet)
+	err := axfrMod.CLIInit(cc, rc)
 	if err != nil {
 		panic("failed to initialize axfr test lookup with error: " + err.Error())
 	}
@@ -218,7 +217,7 @@ func TestLookupSingleNS(t *testing.T) {
 		expectedServersMap[ip1][i] = zdns.ParseAnswer(rec)
 	}
 
-	res, _, status, _ := axfrMod.Lookup(resolver, "example.com", "")
+	res, _, status, _ := axfrMod.Lookup(resolver, "example.com", nil)
 	assert.Equal(t, status, zdns.StatusNoError)
 	verifyResult(t, res.(AXFRResult).Servers, expectedServersMap)
 }
@@ -294,7 +293,7 @@ func TestLookupTwoNS(t *testing.T) {
 		expectedServersMap[ip2][i] = zdns.ParseAnswer(rec)
 	}
 
-	res, _, status, _ := axfrMod.Lookup(resolver, "example.com", "")
+	res, _, status, _ := axfrMod.Lookup(resolver, "example.com", nil)
 	assert.Equal(t, status, zdns.StatusNoError)
 	verifyResult(t, res.(AXFRResult).Servers, expectedServersMap)
 }
@@ -323,7 +322,7 @@ func TestFailureInTransfer(t *testing.T) {
 	expectedServersMap := make(map[string][]interface{})
 	expectedServersMap[ip1] = make([]interface{}, 0)
 
-	res, _, status, _ := axfrMod.Lookup(resolver, "example.com", "")
+	res, _, status, _ := axfrMod.Lookup(resolver, "example.com", nil)
 	// The overall status should be no error
 	assert.Equal(t, status, zdns.StatusNoError)
 	// The status for the axfr records for ns1 should be error
@@ -356,7 +355,7 @@ func TestErrorInEnvelope(t *testing.T) {
 	expectedServersMap := make(map[string][]interface{})
 	expectedServersMap[ip1] = make([]interface{}, 0)
 
-	res, _, status, _ := axfrMod.Lookup(resolver, "example.com", "")
+	res, _, status, _ := axfrMod.Lookup(resolver, "example.com", nil)
 	// The overall status should be no error
 	assert.Equal(t, status, zdns.StatusNoError)
 	// The status for the axfr records for ns1 should be error
@@ -383,7 +382,7 @@ func TestNoIpv4InNsLookup(t *testing.T) {
 		},
 	}
 
-	res, _, status, _ := axfrMod.Lookup(resolver, "example.com", "")
+	res, _, status, _ := axfrMod.Lookup(resolver, "example.com", nil)
 	assert.Equal(t, status, zdns.StatusNoError)
 	assert.Equal(t, len(res.(AXFRResult).Servers), 0)
 }
@@ -391,7 +390,7 @@ func TestNoIpv4InNsLookup(t *testing.T) {
 // Querying non-existent domains should return NXDOMAIN status
 func TestNXDomain(t *testing.T) {
 	axfrMod, resolver := InitTest()
-	res, _, status, _ := axfrMod.Lookup(resolver, "example.com", "")
+	res, _, status, _ := axfrMod.Lookup(resolver, "example.com", nil)
 	assert.Equal(t, status, zdns.StatusNXDomain)
 	assert.Equal(t, res, nil)
 }
@@ -405,7 +404,7 @@ func TestErrorInNsLookup(t *testing.T) {
 		Servers: nil,
 	}
 
-	res, _, status, _ := axfrMod.Lookup(resolver, "example.com", "")
+	res, _, status, _ := axfrMod.Lookup(resolver, "example.com", nil)
 	assert.Equal(t, status, nsStatus)
 	assert.Equal(t, res, nil)
 }
